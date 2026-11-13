@@ -207,7 +207,7 @@ def sessions_payload():
             "title": s["status_title"] or s["title"] or (s["first_prompt"] or "")[:80] or s["id"],
             "cwd": s["cwd"], "entrypoint": s["entrypoint"],
             "first_ts": s["first_ts"], "last_ts": s["last_ts"], "prompts": s["prompts"],
-            "last_prompt": s["last_prompt"], "prs": json.loads(s["prs"] or "{}"),
+            "first_prompt": s["first_prompt"], "last_prompt": s["last_prompt"], "prs": json.loads(s["prs"] or "{}"),
             "status_path": s["status_path"],
             "tasks": t, "open": sum(1 for x in t if not x["done"]),
         })
@@ -254,7 +254,12 @@ input[type=search]{flex:1;min-width:180px;padding:8px 12px;font:inherit;border:2
 label{user-select:none;cursor:pointer}
 input[type=checkbox]{width:18px;height:18px;vertical-align:-3px}
 button{font:inherit;border:2px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:6px 14px;cursor:pointer}
-main{max-width:760px;margin:0 auto;padding:20px 16px}
+main{max-width:1800px;margin:0 auto;padding:20px 16px}
+#list{columns:380px;column-gap:20px}
+.card{break-inside:avoid}
+.title{cursor:pointer}
+.full{margin-top:8px;padding:10px 12px;background:var(--chip);border-radius:8px;white-space:pre-wrap;font-size:16px}
+li code{background:var(--chip);padding:1px 6px;border-radius:4px;font-size:15px}
 .summary{margin-bottom:20px}
 .card{background:var(--card);border:2px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:20px}
 .top{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
@@ -298,6 +303,14 @@ const ago = ts => {
   if (m < 1440) return Math.round(m / 60) + "h ago";
   return Math.round(m / 1440) + "d ago";
 };
+// Render **bold** and `code`; shorten long paths, full text on hover.
+const shortPath = c => c.length > 40 && c.includes("/") ? "…/" + c.split("/").filter(Boolean).slice(-2).join("/") : c;
+const md = text => esc(text)
+  .replace(/`([^`]+)`/g, (_, c) => `<code title="${c}">${shortPath(c)}</code>`)
+  .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+// Clicking a title shows the full first message.
+const openFull = new Set();
+const toggleFull = id => { openFull.has(id) ? openFull.delete(id) : openFull.add(id); render(); };
 // claude --resume only finds a session from the folder it was started in.
 const resumeCmd = s => (s.cwd ? `cd '${s.cwd}' && ` : "") + `claude --resume ${s.id}`;
 function copyText(el) {
@@ -324,12 +337,13 @@ function render() {
     let sec = null;
     const tasks = s.tasks.filter(t => showDone || !t.done).map(t => {
       const head = t.section !== sec ? `<div class="sec">${esc(sec = t.section)}</div>` : "";
-      return `${head}<li class="${t.done ? "done" : ""}"><i>${t.done ? "✓" : "○"}</i><span>${esc(t.text)}</span></li>`;
+      return `${head}<li class="${t.done ? "done" : ""}"><i>${t.done ? "✓" : "○"}</i><span>${md(t.text)}</span></li>`;
     }).join("");
     const prs = Object.entries(s.prs).map(([u, n]) => `<a href="${esc(u)}" target="_blank">${esc(n)}</a>`).join(", ");
     return `<div class="card">
-      <div class="top"><span class="title">${esc(s.title)}</span>
+      <div class="top"><span class="title" title="Click for your first message" onclick="toggleFull('${s.id}')">${esc(s.title)}</span>
         ${s.open ? `<span class="badge">${s.open} open</span>` : ""}</div>
+      ${openFull.has(s.id) && s.first_prompt ? `<div class="full">${esc(s.first_prompt)}</div>` : ""}
       ${tasks ? `<ul>${tasks}</ul>` : ""}
       <details data-id="${s.id}" ${openDetails.has(s.id) ? "open" : ""}><summary>Details · ${ago(s.last_ts)}</summary>
         <p>Folder: ${esc(s.cwd || "")}</p>
