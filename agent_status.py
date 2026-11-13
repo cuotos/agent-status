@@ -203,7 +203,8 @@ def sessions_payload():
         t = tasks.get(s["id"], [])
         out.append({
             "id": s["id"],
-            "title": s["title"] or s["status_title"] or (s["first_prompt"] or "")[:80] or s["id"],
+            # Status file title first: T3 renames don't reach the transcript.
+            "title": s["status_title"] or s["title"] or (s["first_prompt"] or "")[:80] or s["id"],
             "cwd": s["cwd"], "entrypoint": s["entrypoint"],
             "first_ts": s["first_ts"], "last_ts": s["last_ts"], "prompts": s["prompts"],
             "last_prompt": s["last_prompt"], "prs": json.loads(s["prs"] or "{}"),
