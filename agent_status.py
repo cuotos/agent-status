@@ -252,6 +252,7 @@ INDEX_HTML = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Status</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23a84f0c'/%3E%3Ccircle cx='17' cy='20' r='5' fill='%23fff'/%3E%3Crect x='27' y='16' width='26' height='8' rx='4' fill='%23fff'/%3E%3Ccircle cx='17' cy='44' r='5' fill='none' stroke='%23fff' stroke-width='3'/%3E%3Crect x='27' y='40' width='18' height='8' rx='4' fill='%23fff' opacity='.6'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
 <style>
