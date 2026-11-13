@@ -202,7 +202,80 @@ def load_status(conn, sid, path):
                      [(sid, n, sec, text, int(done)) for n, sec, text, done in tasks])
 
 
+T3_DIR = HOME / ".t3" / "userdata"
+T3_DB = T3_DIR / "statev2.sqlite"
+
+# Top-level T3 threads (not subagents) that aren't archived or deleted, with the
+# Claude session id behind each one. T3's internal schema: read-only, may change.
+T3_QUERY = """
+SELECT t.thread_id, t.title, t.updated_at,
+       json_extract(t.payload_json, '$.snoozedUntil') AS snoozed_until,
+       json_extract(t.payload_json, '$.settledAt') AS settled_at,
+       json_extract(t.payload_json, '$.unsettledAt') AS unsettled_at,
+       (SELECT json_extract(p.payload_json, '$.nativeThreadRef.nativeId')
+          FROM orchestration_v2_projection_provider_threads p
+         WHERE p.thread_id = t.thread_id
+         ORDER BY p.updated_at DESC LIMIT 1) AS session_id
+  FROM orchestration_v2_projection_threads t
+ WHERE t.archived_at IS NULL AND t.deleted_at IS NULL
+   AND json_extract(t.payload_json, '$.lineage.relationshipToParent') IS NULL
+"""
+
+
+def t3_threads():
+    """Return (open_threads, snoozed_count), or None if T3's DB can't be read."""
+    if not T3_DB.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{T3_DB}?mode=ro", uri=True, timeout=2)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(T3_QUERY).fetchall()
+        conn.close()
+    except sqlite3.Error:
+        return None
+    now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+    try:
+        env = (T3_DIR / "environment-id").read_text().strip()
+    except OSError:
+        env = None
+    threads, snoozed = [], 0
+    for r in rows:
+        settled = r["settled_at"] and (not r["unsettled_at"] or r["settled_at"] > r["unsettled_at"])
+        if settled:
+            continue
+        if r["snoozed_until"] and r["snoozed_until"] > now:
+            snoozed += 1
+            continue
+        threads.append({
+            "thread_id": r["thread_id"], "title": r["title"], "updated_at": r["updated_at"],
+            "session_id": r["session_id"],
+            "link": f"t3-thread://v2/{env}/{r['thread_id']}" if env else None,
+        })
+    return threads, snoozed
+
+
 def sessions_payload():
+    """The board: open T3 threads if T3's DB is readable, else every session."""
+    sessions = {s["id"]: s for s in all_sessions()}
+    t3 = t3_threads()
+    if t3 is None:
+        return {"mode": "all", "sessions": list(sessions.values())}
+    threads, snoozed = t3
+    cards = []
+    for th in threads:
+        card = dict(sessions.get(th["session_id"]) or {
+            "id": th["session_id"] or th["thread_id"], "cwd": None, "prompts": 0, "prs": {},
+            "tasks": [], "open": 0, "last_ts": None, "first_prompt": None, "last_prompt": None,
+            "next": None, "about": None, "status_path": None})
+        card["title"] = th["title"]  # T3's current title, renames included
+        card["t3_link"] = th["link"]
+        card["last_ts"] = card["last_ts"] or th["updated_at"]
+        cards.append(card)
+    cards.sort(key=lambda c: c["last_ts"] or "", reverse=True)
+    return {"mode": "t3", "snoozed": snoozed, "sessions": cards}
+
+
+def all_sessions():
     conn = db()
     tasks = {}
     for t in conn.execute("SELECT * FROM tasks ORDER BY session_id, line_no"):
@@ -252,62 +325,62 @@ INDEX_HTML = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Status</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23a84f0c'/%3E%3Ccircle cx='17' cy='20' r='5' fill='%23fff'/%3E%3Crect x='27' y='16' width='26' height='8' rx='4' fill='%23fff'/%3E%3Ccircle cx='17' cy='44' r='5' fill='none' stroke='%23fff' stroke-width='3'/%3E%3Crect x='27' y='40' width='18' height='8' rx='4' fill='%23fff' opacity='.6'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230969da'/%3E%3Ccircle cx='17' cy='20' r='5' fill='%23fff'/%3E%3Crect x='27' y='16' width='26' height='8' rx='4' fill='%23fff'/%3E%3Ccircle cx='17' cy='44' r='5' fill='none' stroke='%23fff' stroke-width='3'/%3E%3Crect x='27' y='40' width='18' height='8' rx='4' fill='%23fff' opacity='.6'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#faf6ec;--card:#fffdf7;--fg:#2b2b2b;--muted:#5f5d57;--line:#e6dfcf;--accent:#1f5fbf;--warn:#a84f0c;--chip:#f1ead9}
-@media (prefers-color-scheme:dark){:root{--bg:#1b1a17;--card:#24231f;--fg:#e8e4d9;--muted:#b3aea2;--line:#3a3832;--accent:#8fb6ff;--warn:#f0a35e;--chip:#2f2d28}}
+/* GitHub-style colours; follows the system light/dark setting. */
+:root{--bg:#f6f8fa;--card:#ffffff;--fg:#1f2328;--muted:#59636e;--line:#d1d9e0;--accent:#0969da;--chip:#eff2f5;--nextbg:#ddf4ff}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--card:#151b23;--fg:#f0f6fc;--muted:#9198a1;--line:#3d444d;--accent:#4493f8;--chip:#262c36;--nextbg:#121d2f}}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.7 "Atkinson Hyperlegible",Verdana,sans-serif;letter-spacing:.01em;word-spacing:.08em}
-header{position:sticky;top:0;background:var(--bg);border-bottom:2px solid var(--line);padding:14px 16px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;z-index:1}
-h1{font-size:19px;margin:0 8px 0 0}
-input[type=search]{flex:1;min-width:180px;padding:8px 12px;font:inherit;border:2px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg)}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 "Fira Code",ui-monospace,SFMono-Regular,Menlo,monospace}
+header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:12px 16px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;z-index:1}
+h1{font-size:17px;margin:0 8px 0 0}
+input[type=search]{flex:1;min-width:180px;padding:6px 10px;font:inherit;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
 label{user-select:none;cursor:pointer}
-input[type=checkbox]{width:18px;height:18px;vertical-align:-3px}
-button{font:inherit;border:2px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:6px 14px;cursor:pointer}
+input[type=checkbox]{width:16px;height:16px;vertical-align:-3px;accent-color:var(--accent)}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:6px;padding:5px 12px;cursor:pointer}
 main{max-width:1800px;margin:0 auto;padding:20px 16px}
-#list{columns:380px;column-gap:20px}
-.card{break-inside:avoid}
-.title{cursor:pointer}
-.full{margin-top:8px;padding:10px 12px;background:var(--chip);border-radius:8px;white-space:pre-wrap;font-size:14px}
-li code{background:var(--chip);padding:1px 6px;border-radius:4px;font-size:13px}
-.summary{margin-bottom:20px}
-.card{background:var(--card);border:2px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:20px;overflow-wrap:anywhere}
-.top{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
-.title{font-weight:700;font-size:17px;flex:1;min-width:200px}
-.badge{background:var(--warn);color:#fff;border-radius:12px;padding:2px 12px;font-size:14px;font-weight:700}
-ul{list-style:none;margin:10px 0 0;padding:0}
-li{display:flex;gap:12px;align-items:flex-start;padding:6px 0}
-li.done span{color:var(--muted);text-decoration:line-through}
-li i{font-style:normal;color:var(--warn);width:1.2em;flex:none;font-weight:700}
-li.done i{color:var(--muted)}
-.sec{font-weight:700;margin-top:12px}
-details{margin-top:12px;color:var(--muted);font-size:14px}
-summary{cursor:pointer;width:max-content}
-.next{margin-top:12px;padding:12px 14px;border-left:5px solid var(--warn);background:var(--chip);border-radius:6px;font-size:16px;font-weight:700;line-height:1.5}
-.next b{color:var(--warn)}
+.summary{margin-bottom:16px;color:var(--muted)}
+#list{columns:400px;column-gap:16px}
+.card{break-inside:avoid;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:16px;margin-bottom:16px;overflow-wrap:anywhere}
+.top{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.title{font-weight:700;font-size:15px;flex:1;min-width:200px;cursor:pointer}
+.badge{background:var(--accent);color:#fff;border-radius:12px;padding:1px 10px;font-size:12px;font-weight:600}
+.t3{font-size:12px;text-decoration:none}
+.full{margin-top:8px;padding:10px 12px;background:var(--chip);border-radius:6px;white-space:pre-wrap;font-size:13px}
+.next{margin-top:12px;padding:10px 12px;border-left:4px solid var(--accent);background:var(--nextbg);border-radius:6px;font-weight:600;line-height:1.5}
+.next b{color:var(--accent)}
 .next small{display:block;font-weight:400;font-size:12px;color:var(--muted)}
-.next code,.about code{background:var(--card);padding:1px 6px;border-radius:4px;font-size:13px}
+.none{margin-top:12px;color:var(--muted);font-style:italic}
+.hint{margin-top:12px;color:var(--muted)}
 .about{margin-top:10px}
-details ul{color:var(--fg);font-size:15px}
 .about b{color:var(--muted)}
+code{background:var(--chip);padding:1px 5px;border-radius:4px;font:inherit;font-size:.92em}
+ul{list-style:none;margin:8px 0 0;padding:0}
+li{display:flex;gap:10px;align-items:flex-start;padding:4px 0}
+li.done span{color:var(--muted);text-decoration:line-through}
+li i{font-style:normal;color:var(--accent);width:1.2em;flex:none;font-weight:700}
+li.done i{color:var(--muted)}
+.sec{font-weight:700;margin-top:10px}
+details{margin-top:10px;color:var(--muted);font-size:13px}
+details ul{color:var(--fg)}
+summary{cursor:pointer;width:max-content}
 details p{margin:6px 0}
-details code{background:var(--chip);padding:1px 6px;border-radius:4px;cursor:pointer}
-code.resume{display:inline-block;margin-top:4px;padding:6px 10px;word-break:break-all;user-select:all}
+code.resume{display:inline-block;margin-top:4px;padding:6px 10px;word-break:break-all;user-select:all;cursor:pointer}
 a{color:var(--accent)}
 </style></head>
 <body>
 <header>
   <h1>Agent Status</h1>
   <input type="search" id="q" placeholder="Filter sessions…">
-  <label><input type="checkbox" id="openOnly" checked> Open tasks only</label>
+  <label id="openOnlyLabel"><input type="checkbox" id="openOnly" checked> Open tasks only</label>
   <label><input type="checkbox" id="showDone"> Show done tasks</label>
   <button id="refresh">Refresh</button>
 </header>
 <main><div class="summary" id="summary"></div><div id="list"></div></main>
 <script>
-let data = [];
+let data = [], mode = "all", snoozed = 0;
 const openDetails = new Set();  // keep Details open across refreshes
 document.addEventListener("toggle", e => {
   const id = e.target.dataset && e.target.dataset.id;
@@ -330,11 +403,16 @@ const md = text => esc(text)
   // Bare URLs become a short "host ↗" link so they can't overflow the card.
   .replace(/(^|[\s(])(https?:\/\/[^\s)<]+)/g, (_, pre, u) =>
     `${pre}<a href="${u}" target="_blank" title="${u}">${u.split("/")[2]} ↗</a>`);
-// The next step leads the card; fall back to the first open task.
+// The blue box means "waiting on Dan". "Next: none" (or nothing) means no box.
+// Also catches lines written under the older rule ("Claude — …", "all done").
+const NOT_WAITING = /^(none|nothing)\b|nothing waiting|all (items )?done|^claude\b/i;
+const waiting = s => s.next && !NOT_WAITING.test(s.next.trim());
 function nextBlock(s) {
-  if (s.next) return `<div class="next"><b>Next:</b> ${md(s.next)}</div>`;
+  if (waiting(s)) return `<div class="next"><b>Waiting on you:</b> ${md(s.next)}</div>`;
+  if (s.next) return `<div class="none">Nothing waiting on you</div>`;
+  // No Next line yet (older session): show the first open task, plainly.
   const t = s.tasks.find(t => !t.done);
-  return t ? `<div class="next fallback"><b>Next:</b> ${md(t.text)}<small>(first open task)</small></div>` : "";
+  return t ? `<div class="hint"><b>First open task:</b> ${md(t.text)}</div>` : "";
 }
 // Clicking a title shows the full first message.
 const openFull = new Set();
@@ -350,17 +428,22 @@ function copyText(el) {
 }
 async function load(force) {
   const r = await fetch("/api/sessions" + (force ? "?refresh=1" : ""));
-  data = await r.json();
+  const body = await r.json();
+  data = body.sessions; mode = body.mode; snoozed = body.snoozed || 0;
+  // With T3, the board is exactly the open threads, so the filter isn't needed.
+  $("openOnlyLabel").hidden = mode === "t3";
   render();
 }
 function render() {
   const q = $("q").value.toLowerCase();
-  const openOnly = $("openOnly").checked, showDone = $("showDone").checked;
+  const openOnly = mode !== "t3" && $("openOnly").checked, showDone = $("showDone").checked;
   const rows = data.filter(s =>
     (!openOnly || s.open > 0) &&
     (!q || [s.title, s.cwd, s.last_prompt, ...s.tasks.map(t => t.text)].join(" ").toLowerCase().includes(q)));
   const totalOpen = data.reduce((n, s) => n + s.open, 0);
-  $("summary").textContent = `${rows.length} sessions shown · ${totalOpen} open tasks across ${data.filter(s => s.open).length} sessions`;
+  $("summary").textContent = mode === "t3"
+    ? `${rows.length} open T3 threads · ${totalOpen} open tasks${snoozed ? ` · ${snoozed} snoozed (hidden)` : ""}`
+    : `${rows.length} sessions shown · ${totalOpen} open tasks across ${data.filter(s => s.open).length} sessions`;
   $("list").innerHTML = rows.map(s => {
     let sec = null;
     const tasks = s.tasks.filter(t => showDone || !t.done).map(t => {
@@ -370,9 +453,10 @@ function render() {
     const prs = Object.entries(s.prs).map(([u, n]) => `<a href="${esc(u)}" target="_blank">${esc(n)}</a>`).join(", ");
     return `<div class="card">
       <div class="top"><span class="title" title="Click for your first message" onclick="toggleFull('${s.id}')">${esc(s.title)}</span>
-        ${s.open ? `<span class="badge">${s.open} open</span>` : ""}</div>
+        ${s.open ? `<span class="badge">${s.open} open</span>` : ""}
+</div>
       ${openFull.has(s.id) && s.first_prompt ? `<div class="full">${esc(s.first_prompt)}</div>` : ""}
-      ${nextBlock(s)}
+      ${nextBlock(s) || (s.about ? "" : `<div class="none">No status yet</div>`)}
       ${s.about ? `<div class="about"><b>About:</b> ${md(s.about)}</div>` : ""}
       ${tasks ? `<details data-id="t-${s.id}" ${openDetails.has("t-" + s.id) ? "open" : ""}>
         <summary>Tasks (${s.open} open)</summary><ul>${tasks}</ul></details>` : ""}
