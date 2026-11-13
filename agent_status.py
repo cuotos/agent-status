@@ -121,12 +121,20 @@ def parse_transcript(path):
     return info
 
 
+SUMMARY = re.compile(r"^\**(Next|About)\**:\**\s*(.*)$", re.I)
+
+
 def parse_status(path):
-    """Return (title, tasks). tasks = [(line_no, section, text, done)]."""
-    title, section, tasks = None, None, []
+    """Return (title, summary, tasks). summary = {"next": .., "about": ..};
+    tasks = [(line_no, section, text, done)]."""
+    title, section, tasks, summary = None, None, [], {}
     for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines()):
         if title is None and line.startswith("# "):
             title = line[2:].strip()
+            continue
+        s = SUMMARY.match(line.strip())
+        if s and section is None:
+            summary[s.group(1).lower()] = s.group(2).strip()
             continue
         h = HEADING.match(line)
         if h:
@@ -135,7 +143,7 @@ def parse_status(path):
         m = CHECKBOX.match(line)
         if m:
             tasks.append((n, section, m.group(4).strip(), m.group(2).lower() == "x"))
-    return title, tasks
+    return title, summary, tasks
 
 
 def scan(force=False):
@@ -183,10 +191,12 @@ def scan(force=False):
 
 
 def load_status(conn, sid, path):
-    title, tasks = parse_status(path)
+    title, summary, tasks = parse_status(path)
     conn.execute("INSERT OR IGNORE INTO sessions (id, prompts) VALUES (?, 0)", (sid,))
-    conn.execute("UPDATE sessions SET status_path=?, status_mtime=?, status_title=? WHERE id=?",
-                 (str(path), path.stat().st_mtime, title, sid))
+    conn.execute("""UPDATE sessions SET status_path=?, status_mtime=?, status_title=?,
+                        next_step=?, about=? WHERE id=?""",
+                 (str(path), path.stat().st_mtime, title,
+                  summary.get("next"), summary.get("about"), sid))
     conn.execute("DELETE FROM tasks WHERE session_id=?", (sid,))
     conn.executemany("INSERT INTO tasks VALUES (?,?,?,?,?)",
                      [(sid, n, sec, text, int(done)) for n, sec, text, done in tasks])
@@ -209,6 +219,7 @@ def sessions_payload():
             "first_ts": s["first_ts"], "last_ts": s["last_ts"], "prompts": s["prompts"],
             "first_prompt": s["first_prompt"], "last_prompt": s["last_prompt"], "prs": json.loads(s["prs"] or "{}"),
             "status_path": s["status_path"],
+            "next": s["next_step"], "about": s["about"],
             "tasks": t, "open": sum(1 for x in t if not x["done"]),
         })
     conn.close()
@@ -273,6 +284,13 @@ li.done i{color:var(--muted)}
 .sec{font-weight:700;margin-top:12px}
 details{margin-top:12px;color:var(--muted);font-size:16px}
 summary{cursor:pointer;width:max-content}
+.next{margin-top:12px;padding:12px 14px;border-left:5px solid var(--warn);background:var(--chip);border-radius:6px;font-size:19px;font-weight:700;line-height:1.5}
+.next b{color:var(--warn)}
+.next small{display:block;font-weight:400;font-size:14px;color:var(--muted)}
+.next code,.about code{background:var(--card);padding:1px 6px;border-radius:4px;font-size:15px}
+.about{margin-top:10px}
+details ul{color:var(--fg);font-size:17px}
+.about b{color:var(--muted)}
 details p{margin:6px 0}
 details code{background:var(--chip);padding:1px 6px;border-radius:4px;cursor:pointer}
 code.resume{display:inline-block;margin-top:4px;padding:6px 10px;word-break:break-all;user-select:all}
@@ -308,6 +326,12 @@ const shortPath = c => c.length > 40 && c.includes("/") ? "…/" + c.split("/").
 const md = text => esc(text)
   .replace(/`([^`]+)`/g, (_, c) => `<code title="${c}">${shortPath(c)}</code>`)
   .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+// The next step leads the card; fall back to the first open task.
+function nextBlock(s) {
+  if (s.next) return `<div class="next"><b>Next:</b> ${md(s.next)}</div>`;
+  const t = s.tasks.find(t => !t.done);
+  return t ? `<div class="next fallback"><b>Next:</b> ${md(t.text)}<small>(first open task)</small></div>` : "";
+}
 // Clicking a title shows the full first message.
 const openFull = new Set();
 const toggleFull = id => { openFull.has(id) ? openFull.delete(id) : openFull.add(id); render(); };
@@ -344,7 +368,10 @@ function render() {
       <div class="top"><span class="title" title="Click for your first message" onclick="toggleFull('${s.id}')">${esc(s.title)}</span>
         ${s.open ? `<span class="badge">${s.open} open</span>` : ""}</div>
       ${openFull.has(s.id) && s.first_prompt ? `<div class="full">${esc(s.first_prompt)}</div>` : ""}
-      ${tasks ? `<ul>${tasks}</ul>` : ""}
+      ${nextBlock(s)}
+      ${s.about ? `<div class="about"><b>About:</b> ${md(s.about)}</div>` : ""}
+      ${tasks ? `<details data-id="t-${s.id}" ${openDetails.has("t-" + s.id) ? "open" : ""}>
+        <summary>Tasks (${s.open} open)</summary><ul>${tasks}</ul></details>` : ""}
       <details data-id="${s.id}" ${openDetails.has(s.id) ? "open" : ""}><summary>Details · ${ago(s.last_ts)}</summary>
         <p>Folder: ${esc(s.cwd || "")}</p>
         <p>${s.prompts} prompts${prs ? ` · PRs: ${prs}` : ""}</p>
@@ -380,6 +407,12 @@ def main():
 
     conn = db()
     conn.executescript(SCHEMA)
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+    for col in ("next_step", "about"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} TEXT")
+            conn.execute("UPDATE sessions SET status_mtime=NULL")  # force re-read
+    conn.commit()
     conn.close()
     scan(force=True)
 
