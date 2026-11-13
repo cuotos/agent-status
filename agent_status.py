@@ -272,7 +272,7 @@ main{max-width:1800px;margin:0 auto;padding:20px 16px}
 .full{margin-top:8px;padding:10px 12px;background:var(--chip);border-radius:8px;white-space:pre-wrap;font-size:14px}
 li code{background:var(--chip);padding:1px 6px;border-radius:4px;font-size:13px}
 .summary{margin-bottom:20px}
-.card{background:var(--card);border:2px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:20px}
+.card{background:var(--card);border:2px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:20px;overflow-wrap:anywhere}
 .top{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
 .title{font-weight:700;font-size:17px;flex:1;min-width:200px}
 .badge{background:var(--warn);color:#fff;border-radius:12px;padding:2px 12px;font-size:14px;font-weight:700}
@@ -325,7 +325,10 @@ const ago = ts => {
 const shortPath = c => c.length > 40 && c.includes("/") ? "…/" + c.split("/").filter(Boolean).slice(-2).join("/") : c;
 const md = text => esc(text)
   .replace(/`([^`]+)`/g, (_, c) => `<code title="${c}">${shortPath(c)}</code>`)
-  .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+  // Bare URLs become a short "host ↗" link so they can't overflow the card.
+  .replace(/(^|[\s(])(https?:\/\/[^\s)<]+)/g, (_, pre, u) =>
+    `${pre}<a href="${u}" target="_blank" title="${u}">${u.split("/")[2]} ↗</a>`);
 // The next step leads the card; fall back to the first open task.
 function nextBlock(s) {
   if (s.next) return `<div class="next"><b>Next:</b> ${md(s.next)}</div>`;
