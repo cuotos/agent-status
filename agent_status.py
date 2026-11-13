@@ -269,6 +269,7 @@ details{margin-top:12px;color:var(--muted);font-size:16px}
 summary{cursor:pointer;width:max-content}
 details p{margin:6px 0}
 details code{background:var(--chip);padding:1px 6px;border-radius:4px;cursor:pointer}
+code.resume{display:inline-block;margin-top:4px;padding:6px 10px;word-break:break-all;user-select:all}
 a{color:var(--accent)}
 </style></head>
 <body>
@@ -296,6 +297,15 @@ const ago = ts => {
   if (m < 1440) return Math.round(m / 60) + "h ago";
   return Math.round(m / 1440) + "d ago";
 };
+// claude --resume only finds a session from the folder it was started in.
+const resumeCmd = s => (s.cwd ? `cd '${s.cwd}' && ` : "") + `claude --resume ${s.id}`;
+function copyText(el) {
+  navigator.clipboard.writeText(el.textContent).then(() => {
+    const old = el.textContent;
+    el.textContent = "Copied ✓";
+    setTimeout(() => { el.textContent = old; }, 1200);
+  });
+}
 async function load(force) {
   const r = await fetch("/api/sessions" + (force ? "?refresh=1" : ""));
   data = await r.json();
@@ -324,7 +334,7 @@ function render() {
         <p>Folder: ${esc(s.cwd || "")}</p>
         <p>${s.prompts} prompts${prs ? ` · PRs: ${prs}` : ""}</p>
         ${s.last_prompt ? `<p>Last prompt: ${esc(s.last_prompt)}</p>` : ""}
-        <p>Resume: <code title="Click to copy" onclick="navigator.clipboard.writeText('claude --resume ${s.id}')">claude --resume ${s.id.slice(0, 8)}…</code></p>
+        <p>Resume (click to copy):<br><code class="resume" onclick="copyText(this)">${esc(resumeCmd(s))}</code></p>
       </details></div>`;
   }).join("") || "<p>Nothing to show.</p>";
 }
