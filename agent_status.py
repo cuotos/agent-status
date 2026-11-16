@@ -359,7 +359,7 @@ main{max-width:1800px;margin:0 auto;padding:20px 16px}
 code{background:var(--chip);padding:1px 5px;border-radius:4px;font:inherit;font-size:.92em}
 ul{list-style:none;margin:8px 0 0;padding:0}
 li{display:flex;gap:10px;align-items:flex-start;padding:4px 0}
-li.done span{color:var(--muted);text-decoration:line-through}
+li.done span{color:var(--muted)}
 li i{font-style:normal;color:var(--accent);width:1.2em;flex:none;font-weight:700}
 li.done i{color:var(--muted)}
 .sec{font-weight:700;margin-top:10px}
