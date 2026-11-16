@@ -440,6 +440,7 @@ function render() {
   const rows = data.filter(s =>
     (!openOnly || s.open > 0) &&
     (!q || [s.title, s.cwd, s.last_prompt, ...s.tasks.map(t => t.text)].join(" ").toLowerCase().includes(q)));
+  rows.sort((a, b) => waiting(b) - waiting(a));  // waiting on Dan first; otherwise keep server order (newest first)
   const totalOpen = data.reduce((n, s) => n + s.open, 0);
   $("summary").textContent = mode === "t3"
     ? `${rows.length} open T3 threads · ${totalOpen} open tasks${snoozed ? ` · ${snoozed} snoozed (hidden)` : ""}`
