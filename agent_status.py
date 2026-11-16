@@ -369,6 +369,15 @@ summary{cursor:pointer;width:max-content}
 details p{margin:6px 0}
 code.resume{display:inline-block;margin-top:4px;padding:6px 10px;word-break:break-all;user-select:all;cursor:pointer}
 a{color:var(--accent)}
+/* Table view: one row per thread, cells cut to one line, full text on hover. */
+#list.table{columns:auto}
+table{width:100%;border-collapse:collapse;table-layout:fixed;background:var(--card);border:1px solid var(--line);border-radius:6px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:13px}
+td.title{font-weight:700;min-width:0}
+td.wait{background:var(--nextbg);font-weight:600;box-shadow:inset 4px 0 var(--accent)}
+td.muted{color:var(--muted)}
+td.copy{cursor:pointer;color:var(--accent)}
 </style></head>
 <body>
 <header>
@@ -376,6 +385,7 @@ a{color:var(--accent)}
   <input type="search" id="q" placeholder="Filter sessions…">
   <label id="openOnlyLabel"><input type="checkbox" id="openOnly" checked> Open tasks only</label>
   <label><input type="checkbox" id="showDone"> Show done tasks</label>
+  <button id="view">Table view</button>
   <button id="refresh">Refresh</button>
 </header>
 <main><div class="summary" id="summary"></div><div id="list"></div></main>
@@ -420,7 +430,7 @@ const toggleFull = id => { openFull.has(id) ? openFull.delete(id) : openFull.add
 // claude --resume only finds a session from the folder it was started in.
 const resumeCmd = s => (s.cwd ? `cd '${s.cwd}' && ` : "") + `claude --resume ${s.id}`;
 function copyText(el) {
-  navigator.clipboard.writeText(el.textContent).then(() => {
+  navigator.clipboard.writeText(el.dataset.copy || el.textContent).then(() => {
     const old = el.textContent;
     el.textContent = "Copied ✓";
     setTimeout(() => { el.textContent = old; }, 1200);
@@ -434,6 +444,37 @@ async function load(force) {
   $("openOnlyLabel").hidden = mode === "t3";
   render();
 }
+// Cards or table; remembered in this browser.
+let view = "cards";
+try { view = localStorage.getItem("view") || "cards"; } catch (e) {}
+const setViewLabel = () => { $("view").textContent = view === "table" ? "Card view" : "Table view"; };
+setViewLabel();
+$("view").onclick = () => {
+  view = view === "table" ? "cards" : "table";
+  try { localStorage.setItem("view", view); } catch (e) {}
+  setViewLabel(); render();
+};
+// One line per cell; hovering shows the full text (title attribute).
+const cell = (text, cls = "", html) =>
+  `<td class="${cls}" title="${esc(text)}">${html ?? esc(text)}</td>`;
+function renderTable(rows) {
+  const body = rows.map(s => {
+    const open = s.tasks.filter(t => !t.done).map(t => "○ " + t.text).join("\n");
+    const next = waiting(s) ? s.next : "";
+    return `<tr>
+      ${cell(s.title + (s.first_prompt ? "\n\n" + s.first_prompt : ""), "title", esc(s.title))}
+      ${cell(next, next ? "wait" : "", next ? md(next) : "")}
+      ${cell(s.about || "", "", md(s.about || ""))}
+      ${cell(open, "muted", s.open ? `${s.open} open` : "")}
+      ${cell(s.last_ts ? new Date(s.last_ts).toLocaleString() : "", "muted", ago(s.last_ts))}
+      <td class="copy" title="${esc(resumeCmd(s))}" data-copy="${esc(resumeCmd(s))}" onclick="copyText(this)">copy</td>
+    </tr>`;
+  }).join("");
+  $("list").innerHTML = rows.length ? `<table>
+    <colgroup><col style="width:22%"><col style="width:30%"><col><col style="width:9%"><col style="width:8%"><col style="width:6%"></colgroup>
+    <thead><tr><th>Thread</th><th>Waiting on you</th><th>About</th><th>Tasks</th><th>Active</th><th>Resume</th></tr></thead>
+    <tbody>${body}</tbody></table>` : "<p>Nothing to show.</p>";
+}
 function render() {
   const q = $("q").value.toLowerCase();
   const openOnly = mode !== "t3" && $("openOnly").checked, showDone = $("showDone").checked;
@@ -445,6 +486,8 @@ function render() {
   $("summary").textContent = mode === "t3"
     ? `${rows.length} open T3 threads · ${totalOpen} open tasks${snoozed ? ` · ${snoozed} snoozed (hidden)` : ""}`
     : `${rows.length} sessions shown · ${totalOpen} open tasks across ${data.filter(s => s.open).length} sessions`;
+  $("list").className = view;
+  if (view === "table") return renderTable(rows);
   $("list").innerHTML = rows.map(s => {
     let sec = null;
     const tasks = s.tasks.filter(t => showDone || !t.done).map(t => {
