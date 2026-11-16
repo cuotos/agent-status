@@ -378,6 +378,16 @@ td.title{font-weight:700;min-width:0}
 td.wait{background:var(--nextbg);font-weight:600;box-shadow:inset 4px 0 var(--accent)}
 td.muted{color:var(--muted)}
 td.copy{cursor:pointer;color:var(--accent)}
+td.title{cursor:pointer}
+/* Big hover popup for Thread and Waiting cells. */
+#tip{position:fixed;z-index:5;max-width:560px;padding:14px 16px;background:var(--card);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.25);font-size:16px;line-height:1.6;overflow-wrap:anywhere;pointer-events:none}
+#tip small{color:var(--muted);font-size:13px}
+/* Full thread popup (click a thread). */
+dialog#full{width:min(760px,92vw);max-height:85vh;padding:20px 24px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:10px;font-size:15px;overflow-wrap:anywhere}
+dialog#full::backdrop{background:rgba(0,0,0,.45)}
+dialog#full h2{font-size:18px;margin:0 32px 4px 0}
+dialog#full .close{position:absolute;top:14px;right:16px}
+.muted{color:var(--muted)}
 </style></head>
 <body>
 <header>
@@ -389,6 +399,11 @@ td.copy{cursor:pointer;color:var(--accent)}
   <button id="refresh">Refresh</button>
 </header>
 <main><div class="summary" id="summary"></div><div id="list"></div></main>
+<div id="tip" hidden></div>
+<dialog id="full" onclick="if (event.target === this) this.close()">
+  <button class="close" onclick="$('full').close()">Close</button>
+  <div id="fullBody"></div>
+</dialog>
 <script>
 let data = [], mode = "all", snoozed = 0;
 const openDetails = new Set();  // keep Details open across refreshes
@@ -454,25 +469,56 @@ $("view").onclick = () => {
   try { localStorage.setItem("view", view); } catch (e) {}
   setViewLabel(); render();
 };
-// One line per cell; hovering shows the full text (title attribute).
+// One line per cell. Thread and Waiting show a big popup on hover;
+// smaller cells use the browser tooltip (title attribute).
 const cell = (text, cls = "", html) =>
   `<td class="${cls}" title="${esc(text)}">${html ?? esc(text)}</td>`;
+const tipCell = (tipHtml, cls, html, extra = "") =>
+  `<td class="${cls}" data-tip="${esc(tipHtml)}" ${extra}>${html}</td>`;
+document.addEventListener("mouseover", e => {
+  const td = e.target.closest && e.target.closest("[data-tip]");
+  const tip = $("tip");
+  if (!td || !td.dataset.tip) { tip.hidden = true; return; }
+  tip.innerHTML = td.dataset.tip;
+  tip.hidden = false;
+  const r = td.getBoundingClientRect();
+  tip.style.left = Math.max(8, Math.min(r.left, innerWidth - tip.offsetWidth - 8)) + "px";
+  const below = r.bottom + 6;
+  tip.style.top = (below + tip.offsetHeight < innerHeight ? below : Math.max(8, r.top - tip.offsetHeight - 6)) + "px";
+});
+// Clicking a thread opens everything about it, About included.
+let byId = {};
+function openThread(id) {
+  const s = byId[id];
+  if (!s) return;
+  const tasks = s.tasks.filter(t => !t.done).map(t => `<li><i>○</i><span>${md(t.text)}</span></li>`).join("");
+  $("tip").hidden = true;
+  $("fullBody").innerHTML = `<h2>${esc(s.title)}</h2>
+    ${waiting(s) ? `<div class="next"><b>Waiting on you:</b> ${md(s.next)}</div>` : `<div class="none">Nothing waiting on you</div>`}
+    ${s.about ? `<div class="about"><b>About:</b> ${md(s.about)}</div>` : ""}
+    ${tasks ? `<div class="sec">Open tasks</div><ul>${tasks}</ul>` : ""}
+    ${s.first_prompt ? `<div class="sec">Your first message</div><div class="full">${esc(s.first_prompt)}</div>` : ""}
+    <p class="muted">Folder: ${esc(s.cwd || "")} · active ${ago(s.last_ts)}</p>
+    <p>Resume (click to copy):<br><code class="resume" onclick="copyText(this)">${esc(resumeCmd(s))}</code></p>`;
+  $("full").showModal();
+}
 function renderTable(rows) {
+  byId = Object.fromEntries(rows.map(s => [s.id, s]));
+  $("tip").hidden = true;
   const body = rows.map(s => {
     const open = s.tasks.filter(t => !t.done).map(t => "○ " + t.text).join("\n");
     const next = waiting(s) ? s.next : "";
     return `<tr>
-      ${cell(s.title + (s.first_prompt ? "\n\n" + s.first_prompt : ""), "title", esc(s.title))}
-      ${cell(next, next ? "wait" : "", next ? md(next) : "")}
-      ${cell(s.about || "", "", md(s.about || ""))}
+      ${tipCell(`<b>${esc(s.title)}</b><br><small>Click to open</small>`, "title", esc(s.title), `onclick="openThread('${s.id}')"`)}
+      ${next ? tipCell(md(next), "wait", md(next)) : "<td></td>"}
       ${cell(open, "muted", s.open ? `${s.open} open` : "")}
       ${cell(s.last_ts ? new Date(s.last_ts).toLocaleString() : "", "muted", ago(s.last_ts))}
       <td class="copy" title="${esc(resumeCmd(s))}" data-copy="${esc(resumeCmd(s))}" onclick="copyText(this)">copy</td>
     </tr>`;
   }).join("");
   $("list").innerHTML = rows.length ? `<table>
-    <colgroup><col style="width:22%"><col style="width:30%"><col><col style="width:9%"><col style="width:8%"><col style="width:6%"></colgroup>
-    <thead><tr><th>Thread</th><th>Waiting on you</th><th>About</th><th>Tasks</th><th>Active</th><th>Resume</th></tr></thead>
+    <colgroup><col style="width:32%"><col><col style="width:9%"><col style="width:8%"><col style="width:6%"></colgroup>
+    <thead><tr><th>Thread</th><th>Waiting on you</th><th>Tasks</th><th>Active</th><th>Resume</th></tr></thead>
     <tbody>${body}</tbody></table>` : "<p>Nothing to show.</p>";
 }
 function render() {
