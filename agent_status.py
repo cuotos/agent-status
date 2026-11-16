@@ -388,13 +388,13 @@ dialog#full::backdrop{background:rgba(0,0,0,.45)}
 dialog#full h2{font-size:18px;margin:0 32px 4px 0}
 dialog#full .close{position:absolute;top:14px;right:16px}
 .muted{color:var(--muted)}
+button.small{margin-top:6px;padding:2px 10px;font-size:12px}
 </style></head>
 <body>
 <header>
   <h1>Agent Status</h1>
   <input type="search" id="q" placeholder="Filter sessions…">
   <label id="openOnlyLabel"><input type="checkbox" id="openOnly" checked> Open tasks only</label>
-  <label><input type="checkbox" id="showDone"> Show done tasks</label>
   <button id="view">Table view</button>
   <button id="refresh">Refresh</button>
 </header>
@@ -486,21 +486,38 @@ document.addEventListener("mouseover", e => {
   const below = r.bottom + 6;
   tip.style.top = (below + tip.offsetHeight < innerHeight ? below : Math.max(8, r.top - tip.offsetHeight - 6)) + "px";
 });
+// Done tasks are hidden unless shown for that thread.
+const showDoneFor = new Set();
+function taskList(s) {
+  let sec = null;
+  const done = s.tasks.filter(t => t.done).length, show = showDoneFor.has(s.id);
+  const items = s.tasks.filter(t => show || !t.done).map(t => {
+    const head = t.section !== sec ? `<div class="sec">${esc(sec = t.section)}</div>` : "";
+    return `${head}<li class="${t.done ? "done" : ""}"><i>${t.done ? "✓" : "○"}</i><span>${md(t.text)}</span></li>`;
+  }).join("");
+  const btn = done ? `<button class="small" onclick="toggleDone('${s.id}')">${show ? "Hide" : "Show"} ${done} done</button>` : "";
+  return items || btn ? `<ul>${items}</ul>${btn}` : "";
+}
+function toggleDone(id) {
+  showDoneFor.has(id) ? showDoneFor.delete(id) : showDoneFor.add(id);
+  if ($("full").open) openThread(id);
+  render();
+}
 // Clicking a thread opens everything about it, About included.
 let byId = {};
 function openThread(id) {
   const s = byId[id];
   if (!s) return;
-  const tasks = s.tasks.filter(t => !t.done).map(t => `<li><i>○</i><span>${md(t.text)}</span></li>`).join("");
+  const tasks = taskList(s);
   $("tip").hidden = true;
   $("fullBody").innerHTML = `<h2>${esc(s.title)}</h2>
     ${waiting(s) ? `<div class="next"><b>Waiting on you:</b> ${md(s.next)}</div>` : `<div class="none">Nothing waiting on you</div>`}
     ${s.about ? `<div class="about"><b>About:</b> ${md(s.about)}</div>` : ""}
-    ${tasks ? `<div class="sec">Open tasks</div><ul>${tasks}</ul>` : ""}
+    ${tasks ? `<div class="sec">Tasks (${s.open} open)</div>${tasks}` : ""}
     ${s.first_prompt ? `<div class="sec">Your first message</div><div class="full">${esc(s.first_prompt)}</div>` : ""}
     <p class="muted">Folder: ${esc(s.cwd || "")} · active ${ago(s.last_ts)}</p>
     <p>Resume (click to copy):<br><code class="resume" onclick="copyText(this)">${esc(resumeCmd(s))}</code></p>`;
-  $("full").showModal();
+  if (!$("full").open) $("full").showModal();
 }
 function renderTable(rows) {
   byId = Object.fromEntries(rows.map(s => [s.id, s]));
@@ -523,7 +540,7 @@ function renderTable(rows) {
 }
 function render() {
   const q = $("q").value.toLowerCase();
-  const openOnly = mode !== "t3" && $("openOnly").checked, showDone = $("showDone").checked;
+  const openOnly = mode !== "t3" && $("openOnly").checked;
   const rows = data.filter(s =>
     (!openOnly || s.open > 0) &&
     (!q || [s.title, s.cwd, s.last_prompt, ...s.tasks.map(t => t.text)].join(" ").toLowerCase().includes(q)));
@@ -535,11 +552,7 @@ function render() {
   $("list").className = view;
   if (view === "table") return renderTable(rows);
   $("list").innerHTML = rows.map(s => {
-    let sec = null;
-    const tasks = s.tasks.filter(t => showDone || !t.done).map(t => {
-      const head = t.section !== sec ? `<div class="sec">${esc(sec = t.section)}</div>` : "";
-      return `${head}<li class="${t.done ? "done" : ""}"><i>${t.done ? "✓" : "○"}</i><span>${md(t.text)}</span></li>`;
-    }).join("");
+    const tasks = taskList(s);
     const prs = Object.entries(s.prs).map(([u, n]) => `<a href="${esc(u)}" target="_blank">${esc(n)}</a>`).join(", ");
     return `<div class="card">
       <div class="top"><span class="title" title="Click for your first message" onclick="toggleFull('${s.id}')">${esc(s.title)}</span>
@@ -549,7 +562,7 @@ function render() {
       ${nextBlock(s) || (s.about ? "" : `<div class="none">No status yet</div>`)}
       ${s.about ? `<div class="about"><b>About:</b> ${md(s.about)}</div>` : ""}
       ${tasks ? `<details data-id="t-${s.id}" ${openDetails.has("t-" + s.id) ? "open" : ""}>
-        <summary>Tasks (${s.open} open)</summary><ul>${tasks}</ul></details>` : ""}
+        <summary>Tasks (${s.open} open)</summary>${tasks}</details>` : ""}
       <details data-id="${s.id}" ${openDetails.has(s.id) ? "open" : ""}><summary>Details · ${ago(s.last_ts)}</summary>
         <p>Folder: ${esc(s.cwd || "")}</p>
         <p>${s.prompts} prompts${prs ? ` · PRs: ${prs}` : ""}</p>
@@ -558,7 +571,7 @@ function render() {
       </details></div>`;
   }).join("") || "<p>Nothing to show.</p>";
 }
-["q", "openOnly", "showDone"].forEach(id => $(id).addEventListener("input", render));
+["q", "openOnly"].forEach(id => $(id).addEventListener("input", render));
 $("refresh").onclick = () => load(true);
 
 // Poll every 5s while the tab is visible, every 30s while hidden.
