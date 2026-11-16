@@ -488,15 +488,20 @@ document.addEventListener("mouseover", e => {
 });
 // Done tasks are hidden unless shown for that thread.
 const showDoneFor = new Set();
-function taskList(s) {
+// Open tasks first, then the Show/Hide done button, then done tasks below it.
+function taskItems(list) {
   let sec = null;
-  const done = s.tasks.filter(t => t.done).length, show = showDoneFor.has(s.id);
-  const items = s.tasks.filter(t => show || !t.done).map(t => {
+  return list.map(t => {
     const head = t.section !== sec ? `<div class="sec">${esc(sec = t.section)}</div>` : "";
     return `${head}<li class="${t.done ? "done" : ""}"><i>${t.done ? "✓" : "○"}</i><span>${md(t.text)}</span></li>`;
   }).join("");
-  const btn = done ? `<button class="small" onclick="toggleDone('${s.id}')">${show ? "Hide" : "Show"} ${done} done</button>` : "";
-  return items || btn ? `<ul>${items}</ul>${btn}` : "";
+}
+function taskList(s) {
+  const open = s.tasks.filter(t => !t.done), done = s.tasks.filter(t => t.done);
+  const show = showDoneFor.has(s.id);
+  const btn = done.length ? `<button class="small" onclick="toggleDone('${s.id}')">${show ? "Hide" : "Show"} ${done.length} done</button>` : "";
+  const doneList = show && done.length ? `<ul>${taskItems(done)}</ul>` : "";
+  return open.length || btn ? `${open.length ? `<ul>${taskItems(open)}</ul>` : ""}${btn}${doneList}` : "";
 }
 function toggleDone(id) {
   showDoneFor.has(id) ? showDoneFor.delete(id) : showDoneFor.add(id);
