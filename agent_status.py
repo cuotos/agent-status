@@ -575,6 +575,7 @@ function render() {
     const prs = Object.entries(s.prs).map(([u, n]) => `<a href="${esc(u)}" target="_blank">${esc(n)}</a>`).join(", ");
     return `<div class="card">
       <div class="top"><span class="title" title="Click for your first message" onclick="toggleFull('${s.id}')">${esc(s.title)}</span>
+        <span title="High: waiting on you, idle 4h+ · Medium: waiting on you · Low: nothing waiting">${priBadge(s)}</span>
         ${s.open ? `<span class="badge">${s.open} open</span>` : ""}
 </div>
       ${openFull.has(s.id) && s.first_prompt ? `<div class="full">${esc(s.first_prompt)}</div>` : ""}
