@@ -375,6 +375,10 @@ table{width:100%;border-collapse:collapse;table-layout:fixed;background:var(--ca
 th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
 th{color:var(--muted);font-weight:600;font-size:13px}
 td.title{font-weight:700;min-width:0}
+.pri{display:inline-block;min-width:4.5em;text-align:center;border-radius:12px;padding:0 8px;font-size:12px;font-weight:700}
+.pri.p3{background:#cf222e;color:#fff}
+.pri.p2{background:#bf8700;color:#fff}
+.pri.p1{background:var(--chip);color:var(--muted)}
 td.wait{background:var(--nextbg);font-weight:600;box-shadow:inset 4px 0 var(--accent)}
 td.muted{color:var(--muted)}
 td.copy{cursor:pointer;color:var(--accent)}
@@ -524,6 +528,15 @@ function openThread(id) {
     <p>Resume (click to copy):<br><code class="resume" onclick="copyText(this)">${esc(resumeCmd(s))}</code></p>`;
   if (!$("full").open) $("full").showModal();
 }
+// Rough priority, worked out here (nothing records one):
+// High = waiting on you and idle 4h+, Medium = waiting on you, Low = nothing waiting.
+const PRI_NAMES = {3: "High", 2: "Medium", 1: "Low"};
+function priority(s) {
+  if (!waiting(s)) return 1;
+  const hours = s.last_ts ? (Date.now() - new Date(s.last_ts)) / 36e5 : 0;
+  return hours >= 4 ? 3 : 2;
+}
+const priBadge = s => `<span class="pri p${priority(s)}">${PRI_NAMES[priority(s)]}</span>`;
 function renderTable(rows) {
   byId = Object.fromEntries(rows.map(s => [s.id, s]));
   $("tip").hidden = true;
@@ -531,6 +544,7 @@ function renderTable(rows) {
     const open = s.tasks.filter(t => !t.done).map(t => "○ " + t.text).join("\n");
     const next = waiting(s) ? s.next : "";
     return `<tr>
+      <td title="High: waiting on you, idle 4h+ · Medium: waiting on you · Low: nothing waiting">${priBadge(s)}</td>
       ${tipCell(`<b>${esc(s.title)}</b><br><small>Click to open</small>`, "title", esc(s.title), `onclick="openThread('${s.id}')"`)}
       ${next ? tipCell(md(next), "wait", md(next)) : "<td></td>"}
       ${cell(open, "muted", s.open ? `${s.open} open` : "")}
@@ -539,8 +553,8 @@ function renderTable(rows) {
     </tr>`;
   }).join("");
   $("list").innerHTML = rows.length ? `<table>
-    <colgroup><col style="width:32%"><col><col style="width:9%"><col style="width:8%"><col style="width:6%"></colgroup>
-    <thead><tr><th>Thread</th><th>Waiting on you</th><th>Tasks</th><th>Active</th><th>Resume</th></tr></thead>
+    <colgroup><col style="width:8%"><col style="width:30%"><col><col style="width:9%"><col style="width:8%"><col style="width:6%"></colgroup>
+    <thead><tr><th>Priority</th><th>Thread</th><th>Waiting on you</th><th>Tasks</th><th>Active</th><th>Resume</th></tr></thead>
     <tbody>${body}</tbody></table>` : "<p>Nothing to show.</p>";
 }
 function render() {
@@ -549,7 +563,7 @@ function render() {
   const rows = data.filter(s =>
     (!openOnly || s.open > 0) &&
     (!q || [s.title, s.cwd, s.last_prompt, ...s.tasks.map(t => t.text)].join(" ").toLowerCase().includes(q)));
-  rows.sort((a, b) => waiting(b) - waiting(a));  // waiting on Dan first; otherwise keep server order (newest first)
+  rows.sort((a, b) => priority(b) - priority(a));  // highest first; otherwise keep server order (newest first)
   const totalOpen = data.reduce((n, s) => n + s.open, 0);
   $("summary").textContent = mode === "t3"
     ? `${rows.length} open T3 threads · ${totalOpen} open tasks${snoozed ? ` · ${snoozed} snoozed (hidden)` : ""}`
