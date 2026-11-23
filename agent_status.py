@@ -121,7 +121,7 @@ def parse_transcript(path):
     return info
 
 
-SUMMARY = re.compile(r"^\**(Next|About)\**:\**\s*(.*)$", re.I)
+SUMMARY = re.compile(r"^\**(Next|About|Priority)\**:\**\s*(.*)$", re.I)
 
 
 def parse_status(path):
@@ -194,9 +194,9 @@ def load_status(conn, sid, path):
     title, summary, tasks = parse_status(path)
     conn.execute("INSERT OR IGNORE INTO sessions (id, prompts) VALUES (?, 0)", (sid,))
     conn.execute("""UPDATE sessions SET status_path=?, status_mtime=?, status_title=?,
-                        next_step=?, about=? WHERE id=?""",
+                        next_step=?, about=?, priority=? WHERE id=?""",
                  (str(path), path.stat().st_mtime, title,
-                  summary.get("next"), summary.get("about"), sid))
+                  summary.get("next"), summary.get("about"), summary.get("priority"), sid))
     conn.execute("DELETE FROM tasks WHERE session_id=?", (sid,))
     conn.executemany("INSERT INTO tasks VALUES (?,?,?,?,?)",
                      [(sid, n, sec, text, int(done)) for n, sec, text, done in tasks])
@@ -266,7 +266,7 @@ def sessions_payload():
         card = dict(sessions.get(th["session_id"]) or {
             "id": th["session_id"] or th["thread_id"], "cwd": None, "prompts": 0, "prs": {},
             "tasks": [], "open": 0, "last_ts": None, "first_prompt": None, "last_prompt": None,
-            "next": None, "about": None, "status_path": None})
+            "next": None, "about": None, "priority": None, "status_path": None})
         card["title"] = th["title"]  # T3's current title, renames included
         card["t3_link"] = th["link"]
         card["last_ts"] = card["last_ts"] or th["updated_at"]
@@ -292,7 +292,7 @@ def all_sessions():
             "first_ts": s["first_ts"], "last_ts": s["last_ts"], "prompts": s["prompts"],
             "first_prompt": s["first_prompt"], "last_prompt": s["last_prompt"], "prs": json.loads(s["prs"] or "{}"),
             "status_path": s["status_path"],
-            "next": s["next_step"], "about": s["about"],
+            "next": s["next_step"], "about": s["about"], "priority": s["priority"],
             "tasks": t, "open": sum(1 for x in t if not x["done"]),
         })
     conn.close()
@@ -379,6 +379,7 @@ td.title{font-weight:700;min-width:0}
 .pri.p3{background:#cf222e;color:#fff}
 .pri.p2{background:#bf8700;color:#fff}
 .pri.p1{background:var(--chip);color:var(--muted)}
+.pri.set{text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:3px}
 td.wait{background:var(--nextbg);font-weight:600;box-shadow:inset 4px 0 var(--accent)}
 td.muted{color:var(--muted)}
 td.copy{cursor:pointer;color:var(--accent)}
@@ -531,12 +532,19 @@ function openThread(id) {
 // Rough priority, worked out here (nothing records one):
 // High = waiting on you and idle 4h+, Medium = waiting on you, Low = nothing waiting.
 const PRI_NAMES = {3: "High", 2: "Medium", 1: "Low"};
+// A "**Priority:** high|medium|low" line in the status file (set when Dan
+// tells Claude) wins over the guess.
+const PRI_SET = {high: 3, medium: 2, med: 2, low: 1};
+const setPriority = s => PRI_SET[(s.priority || "").trim().toLowerCase().split(/\W/)[0]];
 function priority(s) {
+  if (setPriority(s)) return setPriority(s);
   if (!waiting(s)) return 1;
   const hours = s.last_ts ? (Date.now() - new Date(s.last_ts)) / 36e5 : 0;
   return hours >= 4 ? 3 : 2;
 }
-const priBadge = s => `<span class="pri p${priority(s)}">${PRI_NAMES[priority(s)]}</span>`;
+const priBadge = s => setPriority(s)
+  ? `<span class="pri p${priority(s)} set" title="Set by you">${PRI_NAMES[priority(s)]}</span>`
+  : `<span class="pri p${priority(s)}">${PRI_NAMES[priority(s)]}</span>`;
 function renderTable(rows) {
   byId = Object.fromEntries(rows.map(s => [s.id, s]));
   $("tip").hidden = true;
@@ -619,7 +627,7 @@ def main():
     conn = db()
     conn.executescript(SCHEMA)
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
-    for col in ("next_step", "about"):
+    for col in ("next_step", "about", "priority"):
         if col not in cols:
             conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} TEXT")
             conn.execute("UPDATE sessions SET status_mtime=NULL")  # force re-read
